@@ -1,0 +1,66 @@
+// This compute shader reads panoramic color and depth textures and converts
+// each pixel into a 3D point in a point cloud.
+
+#pragma kernel CSMain
+
+// Input Textures
+Texture2D _ColorTex;
+Texture2D _DepthTex;
+SamplerState sampler_ColorTex;
+
+// Output Buffers (written to by the shader)
+RWStructuredBuffer<float4> positions;
+RWStructuredBuffer<float4> colors;
+RWStructuredBuffer<float> depths;
+
+// Uniforms (variables set from the C# script)
+int _TexWidth;
+int _TexHeight;
+int _TotalPoints;
+float _NearPlane;
+float _FarPlane;
+int _InvertDepth;
+float _HeightOffset;
+
+[numthreads(256, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= _TotalPoints)
+        return;
+
+    int x = idx % _TexWidth;
+    int y = idx / _TexWidth;
+
+    float2 uv = (float2(x, y) + 0.5) / float2(_TexWidth, _TexHeight);
+
+    float4 col = _ColorTex.SampleLevel(sampler_ColorTex, uv, 0);
+    float d = _DepthTex.SampleLevel(sampler_ColorTex, uv, 0).r;
+    
+    // Invert depth if requested
+    if (_InvertDepth == 1)
+    {
+        d = 1.0 - d;
+    }
+
+    // Convert pixel to direction
+    float theta = (uv.x - 0.5) * 6.2831853; // 2 * PI
+    float phi = (uv.y - 0.5) * 3.1415926; // PI
+
+    float3 dir = float3(
+        cos(phi) * sin(theta),
+        sin(phi),
+        cos(phi) * cos(theta)
+    );
+
+    // Calculate distance using near/far planes
+    float dist = lerp(_NearPlane, _FarPlane, d);
+    float3 pos = dir * dist;
+    
+    // Apply camera height offset
+    pos.y += _HeightOffset;
+
+    positions[idx] = float4(pos, 1.0);
+    colors[idx] = col;
+    depths[idx] = d;
+}
